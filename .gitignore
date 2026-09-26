@@ -1,0 +1,23 @@
+# Data & trained models (too large / not for public repo)
+model/data/
+model/saved_models/*.keras
+model/saved_models/*.png
+model/saved_models/*.json
+
+# Secrets
+.env
+*.env
+secrets.toml
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Node / Expo
+node_modules/
+.expo/
+
+# OS
+.DS_Store

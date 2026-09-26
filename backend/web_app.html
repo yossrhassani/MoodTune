@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>MoodTune</title>
+<style>
+  :root { --bg:#0f1117; --panel:#171a23; --accent:#2ee6a6; --text:#f2f2f2; --muted:#9aa0ac; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width: 480px; margin: 0 auto; padding: 16px; }
+  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+  header h1 { font-size:18px; margin:0; }
+  #status { font-size:12px; color:var(--muted); }
+  video, canvas { width:100%; border-radius:16px; background:#000; }
+  button { background:var(--accent); color:#062; border:none; padding:12px 16px; border-radius:10px; font-weight:600; cursor:pointer; width:100%; margin-top:10px; }
+  button.secondary { background:var(--panel); color:var(--text); }
+  .tabs { display:flex; gap:6px; margin:14px 0; }
+  .tabs button { margin:0; flex:1; background:var(--panel); color:var(--text); font-weight:500; }
+  .tabs button.active { background:var(--accent); color:#062; }
+  .panel { background:var(--panel); border-radius:14px; padding:16px; min-height:120px; }
+  .score-row { display:flex; justify-content:space-between; font-size:13px; margin:6px 0; color:var(--muted); }
+  .bar { background:#242938; border-radius:6px; height:6px; overflow:hidden; margin-top:2px;}
+  .bar-fill { background:var(--accent); height:100%; }
+  .track { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid #232734; }
+  .track img { width:44px; height:44px; border-radius:8px; }
+  .track div { flex:1; font-size:13px; }
+  #history li { font-size:13px; color:var(--muted); }
+  #emotion-title { font-size:28px; font-weight:700; margin:4px 0; }
+  #confidence-badge { float:right; background:#242938; padding:4px 10px; border-radius:999px; font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>MoodTune</h1>
+    <span id="status">checking API...</span>
+  </header>
+
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas" style="display:none;"></canvas>
+
+  <button id="scan-btn">Scan mood</button>
+  <button id="switch-btn" class="secondary">Switch camera</button>
+
+  <div id="result" style="display:none;">
+    <div class="tabs">
+      <button data-tab="see" class="active">I see</button>
+      <button data-tab="meaning">Meaning</button>
+      <button data-tab="music">Music</button>
+      <button data-tab="journey">Journey</button>
+    </div>
+
+    <div class="panel" id="tab-see">
+      <span id="confidence-badge"></span>
+      <div id="emotion-title"></div>
+      <div id="mood-subtitle" style="color:var(--muted); font-size:13px;"></div>
+      <div id="all-scores" style="margin-top:14px;"></div>
+    </div>
+
+    <div class="panel" id="tab-meaning" style="display:none;">
+      <h3 id="headline"></h3>
+      <ul id="steps"></ul>
+      <p id="affirmation" style="color:var(--muted); font-style:italic;"></p>
+    </div>
+
+    <div class="panel" id="tab-music" style="display:none;">
+      <div id="tracks"></div>
+    </div>
+
+    <div class="panel" id="tab-journey" style="display:none;">
+      <ul id="history"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = window.location.origin;
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+let currentStream = null;
+let facingMode = "user";
+
+async function startCamera() {
+  if (currentStream) currentStream.getTracks().forEach(t => t.stop());
+  currentStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
+  video.srcObject = currentStream;
+  video.style.transform = facingMode === "user" ? "scaleX(-1)" : "none";
+}
+
+document.getElementById("switch-btn").addEventListener("click", () => {
+  facingMode = facingMode === "user" ? "environment" : "user";
+  startCamera();
+});
+
+async function checkHealth() {
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    const data = await res.json();
+    document.getElementById("status").textContent = data.status === "ok" ? "API online" : "API issue";
+  } catch {
+    document.getElementById("status").textContent = "API offline";
+  }
+}
+
+function loadHistory() {
+  return JSON.parse(localStorage.getItem("moodtune_history") || "[]");
+}
+function saveToHistory(entry) {
+  const history = loadHistory();
+  history.unshift(entry);
+  localStorage.setItem("moodtune_history", JSON.stringify(history.slice(0, 20)));
+}
+function renderHistory() {
+  const list = document.getElementById("history");
+  list.innerHTML = "";
+  loadHistory().forEach(h => {
+    const li = document.createElement("li");
+    li.textContent = `${new Date(h.time).toLocaleTimeString()} — ${h.emotion} (${h.mood})`;
+    list.appendChild(li);
+  });
+}
+
+document.getElementById("scan-btn").addEventListener("click", async () => {
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(video, 0, 0);
+
+  canvas.toBlob(async (blob) => {
+    const formData = new FormData();
+    formData.append("file", blob, "scan.jpg");
+
+    document.getElementById("scan-btn").textContent = "Analyzing...";
+    try {
+      const res = await fetch(`${API_BASE}/analyze`, { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Request failed");
+      const data = await res.json();
+      renderResult(data);
+      saveToHistory({ time: Date.now(), emotion: data.emotion, mood: data.mood });
+      renderHistory();
+    } catch (err) {
+      alert("Scan failed: " + err.message);
+    } finally {
+      document.getElementById("scan-btn").textContent = "Scan mood";
+    }
+  }, "image/jpeg", 0.9);
+});
+
+function renderResult(data) {
+  document.getElementById("result").style.display = "block";
+
+  document.getElementById("emotion-title").textContent =
+    data.emotion.charAt(0).toUpperCase() + data.emotion.slice(1);
+  document.getElementById("mood-subtitle").textContent = `Mood group: ${data.mood}`;
+  document.getElementById("confidence-badge").textContent =
+    `${Math.round(data.confidence * 100)}%${data.is_uncertain ? " · uncertain" : ""}`;
+
+  const scoresEl = document.getElementById("all-scores");
+  scoresEl.innerHTML = "";
+  Object.entries(data.all_scores)
+    .sort((a, b) => b[1] - a[1])
+    .forEach(([label, score]) => {
+      const row = document.createElement("div");
+      row.className = "score-row";
+      row.innerHTML = `<span>${label}</span><span>${Math.round(score * 100)}%</span>`;
+      const bar = document.createElement("div");
+      bar.className = "bar";
+      bar.innerHTML = `<div class="bar-fill" style="width:${score * 100}%"></div>`;
+      scoresEl.appendChild(row);
+      scoresEl.appendChild(bar);
+    });
+
+  document.getElementById("headline").textContent = data.guidance.headline;
+  const stepsEl = document.getElementById("steps");
+  stepsEl.innerHTML = "";
+  data.guidance.steps.forEach(s => {
+    const li = document.createElement("li");
+    li.textContent = s;
+    stepsEl.appendChild(li);
+  });
+  document.getElementById("affirmation").textContent = data.guidance.affirmation;
+
+  const tracksEl = document.getElementById("tracks");
+  tracksEl.innerHTML = "";
+  data.music.tracks.forEach(t => {
+    const div = document.createElement("div");
+    div.className = "track";
+    div.innerHTML = `
+      <img src="${t.cover || ''}" alt="">
+      <div><strong>${t.title}</strong><br><span style="color:var(--muted)">${t.artist}</span></div>
+    `;
+    if (t.preview_url) {
+      const audio = document.createElement("audio");
+      audio.controls = true;
+      audio.src = t.preview_url;
+      div.appendChild(audio);
+    }
+    tracksEl.appendChild(div);
+  });
+}
+
+document.querySelectorAll(".tabs button").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    ["see", "meaning", "music", "journey"].forEach(tab => {
+      document.getElementById(`tab-${tab}`).style.display = tab === btn.dataset.tab ? "block" : "none";
+    });
+  });
+});
+
+startCamera();
+checkHealth();
+renderHistory();
+</script>
+</body>
+</html>
