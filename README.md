@@ -1,7 +1,6 @@
 # MoodTune — Facial Expression Recognition & Music Recommendation
 
 Final year project (PFA), INSAT, Academic Year 2025/2026.
-Team: Yossr Hassani, Nardine Mejri, Youssef Adouni. Supervised by Mr. Mohamed Ali Hamdi.
 
 MoodTune captures a facial expression, classifies it with a custom CNN trained on
 RAF-DB, aggregates the result into one of five mood groups, and recommends music
